@@ -1,0 +1,1 @@
+CREATE INDEX pricesamples_timestamp_idx ON public.pricesamples (timestamp)

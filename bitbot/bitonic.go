@@ -49,65 +49,58 @@ func NewBitonicAgent(buyUrl, sellUrl string) *bitonicAgent {
 func (b *bitonicAgent) RequestPrice(request *PriceRequest) <-chan *PriceResponse {
 	response := make(chan *PriceResponse)
 	go func() {
-		defer close(response)
+		defer func() {
+			err := recover()
+			if err != nil {
+				errmsg := fmt.Sprint(err)
+				if len(errmsg) == 0 {
+					errmsg = "unknown error"
+				}
+
+				response <- &PriceResponse{
+					Request: *request,
+					Error:   errmsg,
+				}
+			}
+			close(response)
+		}()
 
 		url, err := b.buildRequestUrl(request)
-		if err != nil {
-			response <- &PriceResponse{
-				Request: *request,
-				Error:   "Invalid request: " + err.Error(),
-			}
-			return
-		}
+		panicIf(err)
+
 		log.Printf("Sending request %s", url)
 		resp, err := http.Get(url)
-		if err != nil {
-			response <- &PriceResponse{
-				Request: *request,
-				Error:   "The bitonic api returned an error: " + err.Error(),
-			}
-			return
-		}
+		panicIf(err)
+
 		defer resp.Body.Close()
 		bytes, err := ioutil.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-		log.Printf("Got response %s\n%s", resp.Status, string(bytes))
+		panicIf(err)
 
-		if err != nil {
-			response <- &PriceResponse{
-				Request: *request,
-				Error:   "Error while reading the bitonic response: " + err.Error(),
-			}
-			return
-		}
+		log.Printf("Got response %s\n%s", resp.Status, string(bytes))
 		priceData := &struct {
 			Success bool    `json:"success"`
 			Btc     float64 `json:"btc"`
-			Eur     float64 `json"eur"`
+			Eur     float64 `json:"eur"`
 			Price   float64 `json:"price"`
-			Method  string  `json"method"`
-			Error  string  `json"error"`
+			Method  string  `json:"method"`
+			Error   string  `json:"error"`
 		}{}
 
 		err = json.Unmarshal(bytes, priceData)
-		if err != nil {
-			response <- &PriceResponse{
-				Request: *request,
-				Error:   "Error while decoding the bitonic response: " + err.Error(),
-			}
-			return
-		}
-		if !priceData.Success {
+		panicIf(err)
+
+		if !priceData.Success || priceData.Error != "" {
 			response <- &PriceResponse{
 				Request: *request,
 				Error:   fmt.Sprintf("Bitonic said: %s", priceData.Error),
 			}
-			return
-		}
-		response <- &PriceResponse{
-			Request: *request,
-			Btc:     priceData.Btc,
-			Eur:     priceData.Eur,
-			Price:   priceData.Price,
+		} else {
+			response <- &PriceResponse{
+				Request: *request,
+				Btc:     priceData.Btc,
+				Eur:     priceData.Eur,
+				Price:   priceData.Price,
+			}
 		}
 	}()
 
@@ -125,7 +118,7 @@ func (b *bitonicAgent) buildRequestUrl(request *PriceRequest) (string, error) {
 	case ActionSell:
 		url = b.sellUrl
 	default:
-		return "", fmt.Errorf("Invalid action: %s", request.Action)
+		return "", fmt.Errorf("invalid action: %s", request.Action)
 	}
 
 	switch currency {
@@ -134,7 +127,7 @@ func (b *bitonicAgent) buildRequestUrl(request *PriceRequest) (string, error) {
 	case CurrencyEur:
 		url = fmt.Sprintf("%s?%s=%f", url, CurrencyEur, request.Amount)
 	default:
-		return "", fmt.Errorf("Invalid currency: %s", request.Currency)
+		return "", fmt.Errorf("invalid currency: %s", request.Currency)
 	}
 
 	return url, nil

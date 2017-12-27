@@ -3,43 +3,105 @@ package main
 import (
 	"os"
 	"strings"
-	"github.com/resc/slack"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/resc/slack"
+
+	"github.com/resc/rescbits/bitbot/datastore"
+	"github.com/resc/rescbits/bitbot/migrations"
+	"github.com/resc/rescbits/bitbot/env"
+
+	"github.com/pkg/errors"
 	"fmt"
-	"strconv"
+	"time"
 )
 
 // environment variables
 const (
 	BITBOT_SLACK_API_TOKEN = "BITBOT_SLACK_API_TOKEN"
-	BITONIC_BUY_URL        = "BITONIC_BUY_URL"
-	BITONIC_SELL_URL       = "BITONIC_SELL_URL"
-	BITBOT_SLACK_API_DEBUG = "BITBOT_SLACK_API_DEBUG"
+	BITBOT_DATABASE_URL    = "BITBOT_DATABASE_URL"
+
+	BITBOT_BITONIC_BUY_URL       = "BITBOT_BITONIC_BUY_URL"
+	BITBOT_BITONIC_SELL_URL      = "BITBOT_BITONIC_SELL_URL"
+	BITBOT_DATABASE_AUTO_MIGRATE = "BITBOT_DATABASE_AUTO_MIGRATE"
+	BITBOT_SLACK_API_DEBUG       = "BITBOT_SLACK_API_DEBUG"
 )
 
 func main() {
-	env := getEnvironment(true, BITBOT_SLACK_API_TOKEN, BITONIC_BUY_URL, BITONIC_SELL_URL)
-	opt := getEnvironment(false, BITBOT_SLACK_API_DEBUG)
+	env.Required(BITBOT_SLACK_API_TOKEN, "The slack.com api access token")
+	env.Required(BITBOT_DATABASE_URL, "The postgres database uri e.g. postgres://user:password@localhost/dbname?application_name=bitbot&sslmode=disable")
+
+	env.Optional(BITBOT_BITONIC_BUY_URL, "https://bitonic.nl/api/buy", "")
+	env.Optional(BITBOT_BITONIC_SELL_URL, "https://bitonic.nl/api/sell", "")
+	env.OptionalBool(BITBOT_DATABASE_AUTO_MIGRATE, false, "set this variable to true if the database schema should be auto-migrated on startup")
+	env.OptionalBool(BITBOT_SLACK_API_DEBUG, false, "set this variable to true if the slack api library debug logging should be turned on")
+
+	env.MustParse()
+
+	run()
+}
+
+func run() {
 	log.SetLevel(log.DebugLevel)
 
-	api := slack.New(env[BITBOT_SLACK_API_TOKEN])
-	bitonic := NewBitonicAgent(env[BITONIC_BUY_URL], env[BITONIC_SELL_URL])
+	shutdown := make(chan struct{})
+	defer close(shutdown)
 
-	if debug, ok := opt[BITBOT_SLACK_API_DEBUG]; ok {
-		mode := debug == "" || strings.ToLower(debug) == "true"
-		if mode {
-			log.Infof("Running bot in debug mode.")
+	m, err := migrations.New(env.String(BITBOT_DATABASE_URL))
+	// database schema check
+
+	if err != nil {
+		panicIf(errors.Wrap(err, "error initializing database migrations"))
+	}
+
+	if err := m.Ping(); err != nil {
+		panicIf(errors.Wrap(err, "error connecting to the database"))
+	}
+
+	if env.Bool(BITBOT_DATABASE_AUTO_MIGRATE) {
+		err := m.Migrate()
+		panicIf(errors.Wrap(err, "error migrating database schema"))
+	}
+
+	if ok, err := m.IsUpToDate(); err != nil {
+		panicIf(err)
+	} else {
+		if !ok {
+			panicIf(fmt.Errorf("database schema not up to date, please run this app again with env var %s=true", BITBOT_DATABASE_AUTO_MIGRATE))
 		}
-		api.SetDebug(mode)
+	}
+
+	// datastore initialization
+	ds, err := datastore.Open(env.String(BITBOT_DATABASE_URL))
+	panicIf(err)
+	panicIf(ds.Ping())
+
+	// bitonic api initialization
+	bitonic := NewBitonicAgent(env.String(BITBOT_BITONIC_BUY_URL), env.String(BITBOT_BITONIC_SELL_URL))
+
+	// slack api initialization
+	api := slack.New(env.String(BITBOT_SLACK_API_TOKEN))
+
+	if env.Bool(BITBOT_SLACK_API_DEBUG) {
+		log.Infof("Running bot in debug mode.")
+		api.SetDebug(true)
 	}
 
 	rtm := api.NewRTMWithOptions(&slack.RTMOptions{
 		UseRTMStart: false,
 	})
-	go rtm.ManageConnection() // spawn slack bot
-	bot, err := newBot(rtm, "", bitonic)
+
+	// bot initialization
+	bot, err := newBot(rtm, "", bitonic, ds)
 	panicIf(err)
 
+	// spawn slack web socket message loop
+	go rtm.ManageConnection()
+
+	// spawn bitonic price poller
+	go bitonicPricePoller(bitonic, ds, 5*time.Second, shutdown)
+
+	// run bot message loop
 	for {
 		select {
 		case msg := <-rtm.IncomingEvents:
@@ -48,7 +110,7 @@ func main() {
 			case *slack.HelloEvent:
 				log.Debug("Hello received")
 			case *slack.ConnectedEvent:
-				if bot, err = newBot(rtm, ev.Info.User.ID, bitonic); err != nil {
+				if bot, err = newBot(rtm, ev.Info.User.ID, bitonic, ds); err != nil {
 					log.Errorf("Error connecting bot: %s", err.Error())
 				} else {
 					log.Debugf("Connected: bot id is %s", bot.ID)
@@ -88,224 +150,70 @@ func main() {
 	}
 }
 
-type bot struct {
-	// the slack user id for the bot.
-	ID string
-	// Tag is <@bot.ID>
-	Tag           string
-	rtm           *slack.RTM
-	agent         *bitonicAgent
-	conversations map[string]*conversation
-	channels      []slack.Channel
-}
+func bitonicPricePoller(bitonic *bitonicAgent, ds datastore.DataStore, pollInterval time.Duration, shutdown <-chan struct{}) {
+	defer func() {
 
-func newBot(rtm *slack.RTM, userID string, agent *bitonicAgent) (*bot, error) {
-	b := &bot{
-		ID:            userID,
-		Tag:           "<@" + userID + ">",
-		rtm:           rtm,
-		agent:         agent,
-		conversations: make(map[string]*conversation),
-	}
-
-	return b, nil;
-}
-
-func (bot *bot) isDirectChannel(channelID string) bool {
-	return strings.HasPrefix(channelID, "D")
-}
-
-func (bot *bot) isMessageForMe(ev *slack.MessageEvent) bool {
-	// don't respond to myself
-	if ev.Msg.User == bot.ID {
-		return false;
-	}
-	// don't respond to non-messages, edits or deletes
-	if ev.Msg.Type != "message" || ev.Msg.Hidden || ev.Msg.Username =="slackbot" {
-		return false;
-	}
-	// respond to all messages on a direct channel
-	if bot.isDirectChannel(ev.Channel) {
-		return true
-	}
-
-	// or if i'm mentioned in a channel
-	return strings.Contains(ev.Msg.Text, bot.Tag)
-}
-
-func (bot *bot) sendMessagef(channel string, format string, args ...interface{}) error {
-	return bot.sendMessage(channel, fmt.Sprintf(format, args...))
-}
-
-func (bot *bot) sendMessage(channelID string, text string) error {
-	msg := bot.rtm.NewOutgoingMessage(text, channelID)
-	bot.rtm.SendMessage(msg)
-	return nil
-}
-
-func (bot *bot) HandleMessage(ev *slack.MessageEvent) {
-	c := bot.getConversationForUser(ev.Msg.User)
-	c.HandleMessage(ev)
-}
-
-func (bot *bot) getConversationForUser(userID string) *conversation {
-	if c, ok := bot.conversations[userID]; ok {
-		return c
-	} else {
-		c = bot.newConversation(userID)
-		return c
-	}
-}
-
-func (bot *bot) newConversation(userID string) *conversation {
-	c := &conversation{
-		bot:    bot,
-		userID: userID,
-		rtm:    bot.rtm,
-		ctx:    "new",
-	}
-	// just kill the old conversation if there's one
-	bot.conversations[userID] = c
-	return c
-}
-
-func (bot *bot) stripMyNameAndSpaces(msg string) string {
-	i := strings.Index(msg, bot.Tag)
-	if i >= 0 {
-		msg = msg[i+len(bot.Tag):]
-	}
-
-	msg = strings.Replace(msg, bot.Tag, "", -1)
-	msg = strings.TrimSpace(msg)
-	return msg
-}
-
-func (bot *bot) UpdateJoinedChannels() error {
-	if channels, err := bot.rtm.GetChannels(true); err != nil {
-		return err
-	} else {
-		joinedChannels := make([]slack.Channel, 0)
-		for _, c := range channels {
-			log.Debugf("%+v", c)
-			if c.IsMember {
-				joinedChannels = append(joinedChannels, c)
+		err := recover()
+		if err != nil {
+			log.Errorf("bitonicpPricePoller: %v", err)
+			duration := 60 * time.Second
+			log.Infof("bitonicpPricePoller: suspended due to error, resuming in %v", duration)
+			select {
+			case <-shutdown:
+				return // quick exit on shutdown
+			case <-time.After(duration):
+				log.Infof("bitonicpPricePoller: resumed polling")
+				go bitonicPricePoller(bitonic, ds, pollInterval, shutdown)
 			}
 		}
-		bot.channels = joinedChannels
-		return nil
-	}
-}
-func (bot *bot) HasJoinedChannel(channel string) bool {
-	channel = strings.TrimPrefix(channel, "#")
-	for _, c := range bot.channels {
-		if c.ID == channel || c.Name == channel {
-			return true
+	}()
+	for {
+		select {
+		case <-shutdown:
+			return
+		case <-time.After(pollInterval):
+			buyResponse := bitonic.RequestPrice(&PriceRequest{
+				Amount:   1,
+				Currency: CurrencyBtc,
+				Action:   ActionBuy,
+			})
+			sellResponse := bitonic.RequestPrice(&PriceRequest{
+				Amount:   1,
+				Currency: CurrencyBtc,
+				Action:   ActionSell,
+			})
+			if uow, err := ds.StartUow(); err != nil {
+				log.Errorf("")
+			} else {
+				func() {
+					defer uow.Commit()
+
+					buy := <-buyResponse
+					if buy.Error == "" {
+						uow.SavePriceSamples(datastore.PriceSample{
+							Type:      "B",
+							Timestamp: buy.Time,
+							Price:     int64(buy.Price * 1e5),
+						})
+					} else {
+						log.Errorf("Error fetching buy price: %s", buy.Error)
+					}
+
+					sell := <-sellResponse
+					if sell.Error == "" {
+						uow.SavePriceSamples(datastore.PriceSample{
+							Type:      "S",
+							Timestamp: sell.Time,
+							Price:     int64(sell.Price * 1e5),
+						})
+					} else {
+						log.Errorf("Error fetching buy price: %s", sell.Error)
+					}
+				}()
+			}
 		}
 	}
-	return false
 }
-
-type conversation struct {
-	bot    *bot
-	userID string
-	ctx    string
-	rtm    *slack.RTM
-}
-
-const (
-	buyHelpText  = "*buy [amount] [currency]*: Get a price quote for buying the given amount of the given currency (btc or eur)"
-	sellHelpText = "*sell [amount] [currency]*: Get a price quote for selling the given amount of the given currency (btc or eur)"
-)
-
-func (c *conversation) HandleMessage(ev *slack.MessageEvent) {
-	msg := c.bot.stripMyNameAndSpaces(ev.Msg.Text)
-	userInfo, _ := c.rtm.GetUserInfo(ev.Msg.User)
-	log.Debugf("%+v", ev)
-	commandAndParameters := strings.Split(msg, " ")
-	txt, err := "", (error)(nil)
-	if len(commandAndParameters) < 1 {
-
-	} else {
-		cmd := strings.ToLower(commandAndParameters[0])
-		parameters := commandAndParameters[1:]
-		switch cmd {
-		case "hello":
-			txt += fmt.Sprintf("Hello to you too, %s", userInfo.Name)
-
-		case "buy":
-			txt, err = c.HandleBuy(parameters)
-		case "sell":
-			txt, err = c.HandleSell(parameters)
-		default:
-			txt += fmt.Sprintf( "I don't know this '%s' you're speaking of...\n", cmd)
-			fallthrough
-		case "help":
-			txt += "*Commands:*\n" +
-				"*hello*: test if the bot responds\n" +
-				buyHelpText + "\n" +
-				sellHelpText + "\n"
-		}
-	}
-	if err != nil {
-		txt = "Something failed, please try again:  " + err.Error()
-	}
-	outMsg := c.rtm.NewOutgoingMessage(txt, ev.Channel)
-	c.rtm.SendMessage(outMsg)
-}
-func (c *conversation) HandleBuy(parameters []string) (string, error) {
-	if len(parameters) != 2 {
-		return "I didn't understand that\nHere's how the buy command works:\n" + buyHelpText, nil
-	}
-	amount, err := strconv.ParseFloat(parameters[0], 64)
-	if err != nil {
-		return "The amount should be a number like 1.23\n" +
-			err.Error() + "\n" +
-			"Here's how the buy command works:\n" + buyHelpText, nil
-	}
-
-	response := <-c.bot.agent.RequestPrice(&PriceRequest{
-		Action:   ActionBuy,
-		Amount:   amount,
-		Currency: parameters[1],
-	})
-
-	if response.Error == "" {
-		price:= fmt.Sprintf("%.2f",response.Price)
-
-		return fmt.Sprintf("The buying price is %.2f EUR for %f BTC ( %s EUR/BTC )\n https://bitonic.nl/#buy", response.Eur, response.Btc, price), nil
-	} else {
-		return response.Error, nil
-	}
-
-}
-
-func (c *conversation) HandleSell(parameters []string) (string, error) {
-	if len(parameters) != 2 {
-		return "I didn't understand that\nHere's how the sell command works:\n" + sellHelpText, nil
-	}
-	amount, err := strconv.ParseFloat(parameters[0], 64)
-	if err != nil {
-		return "The amount should be a number like 1.23\n" +
-			err.Error() + "\n" +
-			"Here's how the sell command works:\n" + buyHelpText, nil
-	}
-
-	response := <-c.bot.agent.RequestPrice(&PriceRequest{
-		Action:   ActionSell,
-		Amount:   amount,
-		Currency: parameters[1],
-	})
-
-	if response.Error == "" {
-		price:= fmt.Sprintf("%.2f",response.Price)
-
-		return fmt.Sprintf("The selling price is %.2f EUR for %f BTC ( %s EUR/BTC )\n https://bitonic.nl/#sell", response.Eur, response.Btc, price), nil
-	} else {
-		return response.Error, nil
-	}
-
-}
-
 
 func getEnvironment(panicOnMissingKeys bool, keys ...string) map[string]string {
 	missingKeys := make([]string, 0)
