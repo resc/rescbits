@@ -1,19 +1,16 @@
 package main
 
 import (
-	"os"
-	"strings"
+	"fmt"
+	"time"
+
 	log "github.com/sirupsen/logrus"
-
 	"github.com/resc/slack"
-
+	"github.com/pkg/errors"
 	"github.com/resc/rescbits/bitbot/datastore"
 	"github.com/resc/rescbits/bitbot/migrations"
 	"github.com/resc/rescbits/bitbot/env"
-
-	"github.com/pkg/errors"
-	"fmt"
-	"time"
+	"github.com/resc/rescbits/bitbot/bitonic"
 )
 
 // environment variables
@@ -28,6 +25,8 @@ const (
 )
 
 func main() {
+	log.SetLevel(log.DebugLevel)
+
 	env.Required(BITBOT_SLACK_API_TOKEN, "The slack.com api access token")
 	env.Required(BITBOT_DATABASE_URL, "The postgres database uri e.g. postgres://user:password@localhost/dbname?application_name=bitbot&sslmode=disable")
 
@@ -42,14 +41,12 @@ func main() {
 }
 
 func run() {
-	log.SetLevel(log.DebugLevel)
 
 	shutdown := make(chan struct{})
 	defer close(shutdown)
 
-	m, err := migrations.New(env.String(BITBOT_DATABASE_URL))
 	// database schema check
-
+	m, err := migrations.New(env.String(BITBOT_DATABASE_URL))
 	if err != nil {
 		panicIf(errors.Wrap(err, "error initializing database migrations"))
 	}
@@ -76,32 +73,36 @@ func run() {
 	panicIf(err)
 	panicIf(ds.Ping())
 
-	// bitonic api initialization
-	bitonic := NewBitonicAgent(env.String(BITBOT_BITONIC_BUY_URL), env.String(BITBOT_BITONIC_SELL_URL))
+	// bitonic slackApi initialization
+	buyUrl := env.String(BITBOT_BITONIC_BUY_URL)
+	sellUrl := env.String(BITBOT_BITONIC_SELL_URL)
+	bitonicApi := bitonic.New(buyUrl, sellUrl)
 
-	// slack api initialization
-	api := slack.New(env.String(BITBOT_SLACK_API_TOKEN))
-
+	// slack slackApi initialization
+	slackApi := slack.New(env.String(BITBOT_SLACK_API_TOKEN))
 	if env.Bool(BITBOT_SLACK_API_DEBUG) {
 		log.Infof("Running bot in debug mode.")
-		api.SetDebug(true)
+		slackApi.SetDebug(true)
 	}
 
-	rtm := api.NewRTMWithOptions(&slack.RTMOptions{
+	rtm := slackApi.NewRTMWithOptions(&slack.RTMOptions{
 		UseRTMStart: false,
 	})
-
-	// bot initialization
-	bot, err := newBot(rtm, "", bitonic, ds)
-	panicIf(err)
 
 	// spawn slack web socket message loop
 	go rtm.ManageConnection()
 
 	// spawn bitonic price poller
-	go bitonicPricePoller(bitonic, ds, 5*time.Second, shutdown)
+	go bitonic.PricePoller(bitonicApi, ds, 5*time.Second, shutdown)
 
-	// run bot message loop
+	processSlackMessages(rtm, bitonicApi, ds)
+}
+
+func processSlackMessages(rtm *slack.RTM, bitonicApi *bitonic.Api, ds datastore.DataStore) {
+	// bot initialization
+	bot, err := newBot(rtm, "", bitonicApi, ds)
+	panicIf(err)
+	// run slack bot message loop
 	for {
 		select {
 		case msg := <-rtm.IncomingEvents:
@@ -110,7 +111,7 @@ func run() {
 			case *slack.HelloEvent:
 				log.Debug("Hello received")
 			case *slack.ConnectedEvent:
-				if bot, err = newBot(rtm, ev.Info.User.ID, bitonic, ds); err != nil {
+				if bot, err = newBot(rtm, ev.Info.User.ID, bitonicApi, ds); err != nil {
 					log.Errorf("Error connecting bot: %s", err.Error())
 				} else {
 					log.Debugf("Connected: bot id is %s", bot.ID)
@@ -148,90 +149,6 @@ func run() {
 			}
 		}
 	}
-}
-
-func bitonicPricePoller(bitonic *bitonicAgent, ds datastore.DataStore, pollInterval time.Duration, shutdown <-chan struct{}) {
-	defer func() {
-
-		err := recover()
-		if err != nil {
-			log.Errorf("bitonicpPricePoller: %v", err)
-			duration := 60 * time.Second
-			log.Infof("bitonicpPricePoller: suspended due to error, resuming in %v", duration)
-			select {
-			case <-shutdown:
-				return // quick exit on shutdown
-			case <-time.After(duration):
-				log.Infof("bitonicpPricePoller: resumed polling")
-				go bitonicPricePoller(bitonic, ds, pollInterval, shutdown)
-			}
-		}
-	}()
-	for {
-		select {
-		case <-shutdown:
-			return
-		case <-time.After(pollInterval):
-			buyResponse := bitonic.RequestPrice(&PriceRequest{
-				Amount:   1,
-				Currency: CurrencyBtc,
-				Action:   ActionBuy,
-			})
-			sellResponse := bitonic.RequestPrice(&PriceRequest{
-				Amount:   1,
-				Currency: CurrencyBtc,
-				Action:   ActionSell,
-			})
-			if uow, err := ds.StartUow(); err != nil {
-				log.Errorf("")
-			} else {
-				func() {
-					defer uow.Commit()
-
-					buy := <-buyResponse
-					if buy.Error == "" {
-						uow.SavePriceSamples(datastore.PriceSample{
-							Type:      "B",
-							Timestamp: buy.Time,
-							Price:     int64(buy.Price * 1e5),
-						})
-					} else {
-						log.Errorf("Error fetching buy price: %s", buy.Error)
-					}
-
-					sell := <-sellResponse
-					if sell.Error == "" {
-						uow.SavePriceSamples(datastore.PriceSample{
-							Type:      "S",
-							Timestamp: sell.Time,
-							Price:     int64(sell.Price * 1e5),
-						})
-					} else {
-						log.Errorf("Error fetching buy price: %s", sell.Error)
-					}
-				}()
-			}
-		}
-	}
-}
-
-func getEnvironment(panicOnMissingKeys bool, keys ...string) map[string]string {
-	missingKeys := make([]string, 0)
-	env := make(map[string]string)
-	for _, key := range keys {
-		if value, ok := os.LookupEnv(key); ok {
-			// the value may be an empty string, but that's ok,
-			// the variable was present when ok == true
-			env[key] = value
-		} else {
-			missingKeys = append(missingKeys, key)
-		}
-	}
-
-	if panicOnMissingKeys && len(missingKeys) > 0 {
-		panic("Missing environment variables: " + strings.Join(missingKeys, ", "))
-	}
-	return env
 }
 
 func panicIf(err error) {

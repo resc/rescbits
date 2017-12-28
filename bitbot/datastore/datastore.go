@@ -8,14 +8,14 @@ import (
 	"time"
 	"database/sql"
 	"fmt"
-	"log"
 	"github.com/pkg/errors"
 )
 
 const (
 	queryInsertPriceSample      = "INSERT INTO public.pricesamples (timestamp,type,price) VALUES ($1, $2, $3)"
 	querySelectPriceSample      = "SELECT timestamp,type,price FROM public.pricesamples WHERE timestamp BETWEEN $1 AND $2 ORDER BY timestamp LIMIT $3"
-	querySelectPriceSampleCount = "SELECT count(timestamp) FROM public.pricesamples -- WHERE  $1 <= timestamp and timestamp < $2"
+	querySelectPriceSampleCount = "SELECT count(timestamp) FROM public.pricesamples WHERE  $1 <= timestamp AND timestamp < $2"
+	queryDeletePriceSamples     = "DELETE FROM public.pricesamples WHERE  $1 <= timestamp AND timestamp < $2"
 )
 
 /* INSERT
@@ -161,14 +161,14 @@ func (u *uow) SavePriceSamples(samples ...PriceSample) error {
 	if stmt, err := u.tx.Prepare(queryInsertPriceSample); err != nil {
 		return err
 	} else {
+		defer stmt.Close()
 		for i := range samples {
-			log.Printf("inserting: %v %v %v", samples[i].Timestamp.UTC(), samples[i].Type, samples[i].Price)
 			if res, err := stmt.Exec(samples[i].Timestamp.UTC(), samples[i].Type, samples[i].Price); err != nil {
 				return err
-			} else{
-				if rowsAffected,err:= res.RowsAffected();err !=nil {
+			} else {
+				if rowsAffected, err := res.RowsAffected(); err != nil {
 					return err
-				} else if rowsAffected < 1{
+				} else if rowsAffected < 1 {
 					return errors.Errorf("Expected one or more rows affected")
 				}
 			}
@@ -178,19 +178,36 @@ func (u *uow) SavePriceSamples(samples ...PriceSample) error {
 }
 
 func (u *uow) LoadPriceSamples(from time.Time, to time.Time, maxResults int) ([]PriceSample, int, error) {
+	totalResults := int64(0)
 
-	totalResults := 0
-	if err := u.tx.QueryRow(querySelectPriceSampleCount)/*, from.UTC(), to.UTC())*/.Scan(&totalResults); err != nil {
+	rows, err := u.tx.Query(querySelectPriceSampleCount, from.UTC(), to.UTC())
+	if err != nil {
 		return nil, 0, err
 	}
 
+	defer rows.Close()
+
+	for rows.Next() {
+		err = rows.Err()
+		if err != nil {
+			return nil, 0, err
+		}
+
+		if err := rows.Scan(&totalResults); err != nil {
+			return nil, 0, err
+		}
+		err = rows.Err()
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+
 	if totalResults == 0 {
-		log.Printf("No rows found")
 		return nil, 0, nil
 	}
 
-	if totalResults < maxResults {
-		maxResults = totalResults
+	if int(totalResults) < maxResults {
+		maxResults = int(totalResults)
 	}
 
 	if rows, err := u.tx.Query(querySelectPriceSample, from.UTC(), to.UTC(), maxResults); err != nil {
@@ -205,13 +222,28 @@ func (u *uow) LoadPriceSamples(from time.Time, to time.Time, maxResults int) ([]
 				results = append(results, row)
 			}
 		}
-		return results, totalResults, nil
+		return results, int(totalResults), nil
 	}
 }
 
-func (*uow) DeletePriceSamples(from time.Time, to time.Time) (int, error) {
-	panic("implement me")
+func (u *uow) DeletePriceSamples(from time.Time, to time.Time) (int, error) {
+	if stmt, err := u.tx.Prepare(queryDeletePriceSamples); err != nil {
+		return 0, err
+	} else {
+		defer stmt.Close()
+		if res, err := stmt.Exec(from.UTC(), to.UTC()); err != nil {
+			return 0, err
+		} else {
+			if rowsAffected, err := res.RowsAffected(); err != nil {
+				return 0, err
+			} else {
+				return int(rowsAffected), nil
+			}
+		}
+	}
+	return 0, nil
 }
+
 
 func (*uow) LoadAlerts(userID ...string) ([]PriceAlert, error) {
 	panic("implement me")
@@ -234,7 +266,7 @@ func (*uow) IncrementAlertTriggerCount(id int64, timestamp time.Time) (PriceAler
 }
 
 func (u *uow) Commit() error {
-	return u.tx.Rollback()
+	return u.tx.Commit()
 }
 
 func (u *uow) Rollback() error {
