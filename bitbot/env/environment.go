@@ -26,7 +26,7 @@ var (
 	// KeyPattern contains the validation pattern for env keys.
 	// The default accepts variables like ALL_CAPS_WITH_UNDERSCORES.
 	// It can be changed, but you should do so before you register any variables
-	KeyPattern string         = "^[A-Z]+(_[A_Z]+)+$"
+	KeyPattern string         = "^[A-Z]+(_[A-Z]+)*$"
 	vars       map[string]Var = make(map[string]Var)
 	lock       sync.Mutex
 )
