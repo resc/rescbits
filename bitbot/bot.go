@@ -5,6 +5,8 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/resc/slack"
 	"fmt"
+	"github.com/resc/rescbits/bitbot/bitonic"
+	"github.com/resc/rescbits/bitbot/datastore"
 )
 
 type bot struct {
@@ -13,19 +15,19 @@ type bot struct {
 	// Tag is <@bot.ID>
 	Tag           string
 	rtm           *slack.RTM
-	agent         *bitonicAgent
-	datastore     DataStore
+	agent         *bitonic.Api
+	ds            datastore.DataStore
 	conversations map[string]*conversation
 	channels      []slack.Channel
 }
 
-func newBot(rtm *slack.RTM, userID string, agent *bitonicAgent, datastore DataStore) (*bot, error) {
+func newBot(rtm *slack.RTM, userID string, agent *bitonic.Api, ds datastore.DataStore) (*bot, error) {
 	b := &bot{
 		ID:            userID,
 		Tag:           "<@" + userID + ">",
 		rtm:           rtm,
 		agent:         agent,
-		datastore:     datastore,
+		ds:            ds,
 		conversations: make(map[string]*conversation),
 	}
 
