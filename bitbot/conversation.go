@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"github.com/resc/slack"
+	"github.com/resc/rescbits/bitbot/bitonic"
 )
 
 type conversation struct {
@@ -66,8 +67,8 @@ func (c *conversation) HandleBuy(parameters []string) (string, error) {
 			"Here's how the buy command works:\n" + buyHelpText, nil
 	}
 
-	response := <-c.bot.agent.RequestPrice(&PriceRequest{
-		Action:   ActionBuy,
+	response := <-c.bot.agent.RequestPrice(&bitonic.PriceRequest{
+		Action:   bitonic.ActionBuy,
 		Amount:   amount,
 		Currency: parameters[1],
 	})
@@ -93,8 +94,8 @@ func (c *conversation) HandleSell(parameters []string) (string, error) {
 			"Here's how the sell command works:\n" + buyHelpText, nil
 	}
 
-	response := <-c.bot.agent.RequestPrice(&PriceRequest{
-		Action:   ActionSell,
+	response := <-c.bot.agent.RequestPrice(&bitonic.PriceRequest{
+		Action:   bitonic.ActionSell,
 		Amount:   amount,
 		Currency: parameters[1],
 	})
