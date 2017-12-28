@@ -41,9 +41,15 @@ func main() {
 }
 
 func run() {
-
 	shutdown := make(chan struct{})
-	defer close(shutdown)
+
+	defer func() {
+		close(shutdown)
+		err := recover()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
 
 	// database schema check
 	m, err := migrations.New(env.String(BITBOT_DATABASE_URL))
