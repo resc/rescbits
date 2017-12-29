@@ -11,6 +11,7 @@ import (
 	"github.com/resc/rescbits/bitbot/migrations"
 	"github.com/resc/rescbits/bitbot/env"
 	"github.com/resc/rescbits/bitbot/bitonic"
+	"net/url"
 )
 
 // environment variables
@@ -52,12 +53,17 @@ func run() {
 	}()
 
 	// database schema check
-	m, err := migrations.New(env.String(BITBOT_DATABASE_URL))
+	connectionString := env.String(BITBOT_DATABASE_URL)
+	m, err := migrations.New(connectionString)
 	if err != nil {
-		panicIf(errors.Wrap(err, "error initializing database migrations"))
+		// strip out the password, if any...
+		cs, err := url.Parse(connectionString)
+		cs.User = url.User(cs.User.Username())
+		panicIf(errors.Wrapf(err, "error initializing database migrations with conn str %s", cs.String()))
 	}
 
 	if err := m.Ping(); err != nil {
+
 		panicIf(errors.Wrap(err, "error connecting to the database"))
 	}
 
