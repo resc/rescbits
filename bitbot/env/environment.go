@@ -171,7 +171,11 @@ func OptionalBool(key string, defaultValue bool, description string) {
 	}
 }
 
-func OptionalInt(key string, defaultValue int, description string) {
+func OptionalInt(key string, defaultValue int64, description string) {
+	OptionalInt64(key, int64(defaultValue), description)
+}
+
+func OptionalInt64(key string, defaultValue int64, description string) {
 	ensureKeyValid(key)
 
 	lock.Lock()
