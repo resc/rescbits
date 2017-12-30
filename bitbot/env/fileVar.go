@@ -25,6 +25,7 @@ func (v *fileVar) Get(pointer interface{}) {
 func (v *fileVar) parse() error {
 	val, present := os.LookupEnv(v.Name())
 	v.isPresent = present
+	v.raw = val
 	if present {
 		path, err := filepath.Abs(val)
 		if err != nil {

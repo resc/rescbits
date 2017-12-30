@@ -4,9 +4,9 @@ import (
 	"regexp"
 	"github.com/pkg/errors"
 	"sync"
-	"path/filepath"
-	"os"
 	"sort"
+	"os"
+	"path/filepath"
 )
 
 type (
@@ -16,6 +16,7 @@ type (
 		IsOptional() bool
 		IsPresent() bool
 		Type() string
+		Raw() string
 		Get(pointer interface{})
 
 		parse() error
@@ -48,6 +49,14 @@ func Vars() []Var {
 		vv = append(vv, vars[k])
 	}
 	return vv
+}
+
+func GetVar(key string) (Var, bool) {
+	lock.Lock()
+	defer lock.Unlock()
+
+	v, ok := vars[key]
+	return v, ok
 }
 
 func String(key string) string {
@@ -93,16 +102,15 @@ func Get(key string, pointer interface{}) {
 	if ! ok {
 		panic(errors.Errorf("environment variable %s not registered", v.Name()))
 	}
-	if ! v.IsPresent() {
-		if v.IsOptional() {
-			v.Get(pointer)
-		} else {
-			panic(errors.Errorf("environment variable %s not present", v.Name()))
-		}
+
+	if v.IsPresent() || v.IsOptional() {
+		v.Get(pointer)
+	} else {
+		panic(errors.Errorf("environment variable %s not present", v.Name()))
 	}
 }
 
-// MustParse panics on missing environment variables or optional varaibles that can't be parsed successfully
+// MustParse panics on missing environment variables or optional variables that can't be parsed successfully
 func MustParse() {
 	if err := Parse(); err != nil {
 		panic(err)
@@ -115,6 +123,7 @@ func Parse() error {
 	defer lock.Unlock()
 
 	var errs aggregateErrors
+
 	for _, v := range vars {
 		if err := v.parse(); err != nil {
 			errs.Append(err)
@@ -298,6 +307,18 @@ func RequiredFile(key string, description string) {
 	ensureKeyValid(key)
 	lock.Lock()
 	defer lock.Unlock()
+
+	vars[key] = &fileVar{
+		variable: variable{
+			typ:         "file",
+			isOptional:  false,
+			name:        key,
+			description: description,
+			isPresent:   false,
+		},
+		value:        "",
+		defaultValue: "",
+	}
 }
 
 func ensureKeyValid(key string) {

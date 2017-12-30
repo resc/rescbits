@@ -27,6 +27,7 @@ func (v *float64Var) Get(pointer interface{}) {
 func (v *float64Var) parse() error {
 	strVal, present := os.LookupEnv(v.Name())
 	v.isPresent = present
+	v.raw = strVal
 	if present {
 		val, err := strconv.ParseFloat(strVal, 64)
 		if err != nil {

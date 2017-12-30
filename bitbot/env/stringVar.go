@@ -24,6 +24,7 @@ func (v *stringVar) Get(pointer interface{}) {
 func (v *stringVar) parse() error {
 	val, present := os.LookupEnv(v.Name())
 	v.isPresent = present
+	v.raw = val
 	if present {
 		v.value = val
 	} else {

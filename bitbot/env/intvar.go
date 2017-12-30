@@ -8,17 +8,17 @@ import (
 
 type intVar struct {
 	variable
-	value        int
-	defaultValue int
+	value        int64
+	defaultValue int64
 }
 
 var _ Var = (*intVar)(nil)
 
 func (v *intVar) Get(pointer interface{}) {
-	if p, ok := pointer.(*int); ok {
-		*p = v.value
-	} else if p, ok := pointer.(*int64); ok {
+	if p, ok := pointer.(*int64); ok {
 		*p = int64(v.value)
+	} else if p, ok := pointer.(*int); ok {
+		*p = int(v.value)
 	} else if p, ok := pointer.(*int32); ok {
 		*p = int32(v.value)
 	} else if p, ok := pointer.(*int16); ok {
@@ -30,14 +30,15 @@ func (v *intVar) Get(pointer interface{}) {
 	}
 }
 func (v *intVar) parse() error {
-	strval, present := os.LookupEnv(v.Name())
+	strVal, present := os.LookupEnv(v.Name())
 	v.isPresent = present
+	v.raw = strVal
 	if present {
-		val, err := strconv.ParseInt(strval, 10, 64)
+		val, err := strconv.ParseInt(strVal, 10, 64)
 		if err != nil {
-			return errors.Errorf("error parsing %s variable, expected a number like 123, got '%s'", v.Name(), strval)
+			return errors.Errorf("error parsing %s variable, expected a number like 123, got '%s'", v.Name(), strVal)
 		}
-		v.value = int(val)
+		v.value = val
 	} else {
 		if v.IsOptional() {
 			v.value = v.defaultValue

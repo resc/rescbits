@@ -25,6 +25,7 @@ func (v *boolVar) Get(pointer interface{}) {
 func (v *boolVar) parse() error {
 	strVal, present := os.LookupEnv(v.Name())
 	v.isPresent = present
+	v.raw = strVal
 	if present {
 		if strVal == "" {
 			strVal = "true"

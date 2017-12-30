@@ -6,6 +6,7 @@ type variable struct {
 	isPresent   bool
 	description string
 	typ         string
+	raw string
 }
 
 func (v *variable) Name() string {
@@ -26,4 +27,8 @@ func (v *variable) IsPresent() bool {
 
 func (v *variable) Type() string {
 	return v.typ
+}
+
+func (v *variable) Raw() string {
+	return v.raw
 }
