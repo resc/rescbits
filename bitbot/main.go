@@ -54,17 +54,17 @@ func run() {
 
 	// database schema check
 	connectionString := env.String(BITBOT_DATABASE_URL)
+	// strip out the password, if any...
+	cs, err := url.Parse(connectionString)
+	cs.User = url.User(cs.User.Username())
+	connstrNoPassword := cs.String()
 	m, err := migrations.New(connectionString)
 	if err != nil {
-		// strip out the password, if any...
-		cs, err := url.Parse(connectionString)
-		cs.User = url.User(cs.User.Username())
-		panicIf(errors.Wrapf(err, "error initializing database migrations with conn str %s", cs.String()))
+		panicIf(errors.Wrapf(err, "error initializing database migrations with conn str %s", connstrNoPassword))
 	}
 
 	if err := m.Ping(); err != nil {
-
-		panicIf(errors.Wrap(err, "error connecting to the database"))
+		panicIf(errors.Wrapf(err, "error connecting to the database with conn str %s", connstrNoPassword))
 	}
 
 	if env.Bool(BITBOT_DATABASE_AUTO_MIGRATE) {
