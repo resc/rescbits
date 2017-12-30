@@ -11,7 +11,6 @@ import (
 	"github.com/resc/rescbits/bitbot/migrations"
 	"github.com/resc/rescbits/bitbot/env"
 	"github.com/resc/rescbits/bitbot/bitonic"
-	"net/url"
 )
 
 // environment variables
@@ -20,24 +19,13 @@ const (
 	BITBOT_DATABASE_URL    = "BITBOT_DATABASE_URL"
 
 	BITBOT_BITONIC_BUY_URL       = "BITBOT_BITONIC_BUY_URL"
+	BITBOT_POLL_INTERVAL_SEC     = "BITBOT_POLL_INTERVAL_SEC"
 	BITBOT_BITONIC_SELL_URL      = "BITBOT_BITONIC_SELL_URL"
 	BITBOT_DATABASE_AUTO_MIGRATE = "BITBOT_DATABASE_AUTO_MIGRATE"
 	BITBOT_SLACK_API_DEBUG       = "BITBOT_SLACK_API_DEBUG"
 )
 
 func main() {
-	log.SetLevel(log.DebugLevel)
-
-	env.Required(BITBOT_SLACK_API_TOKEN, "The slack.com api access token")
-	env.Required(BITBOT_DATABASE_URL, "The postgres database uri e.g. postgres://user:password@localhost/dbname?application_name=bitbot&sslmode=disable")
-
-	env.Optional(BITBOT_BITONIC_BUY_URL, "https://bitonic.nl/api/buy", "")
-	env.Optional(BITBOT_BITONIC_SELL_URL, "https://bitonic.nl/api/sell", "")
-	env.OptionalBool(BITBOT_DATABASE_AUTO_MIGRATE, false, "set this variable to true if the database schema should be auto-migrated on startup")
-	env.OptionalBool(BITBOT_SLACK_API_DEBUG, false, "set this variable to true if the slack api library debug logging should be turned on")
-
-	env.MustParse()
-
 	run()
 }
 
@@ -49,22 +37,34 @@ func run() {
 		err := recover()
 		if err != nil {
 			log.Fatal(err)
+		} else {
+			log.Infof("stopped")
 		}
 	}()
 
+	log.SetLevel(log.DebugLevel)
+
+	env.Required(BITBOT_SLACK_API_TOKEN, "The slack.com api access token")
+	env.Required(BITBOT_DATABASE_URL, "The postgres database uri e.g. postgres://user:password@localhost/dbname?application_name=bitbot&sslmode=disable")
+
+	env.Optional(BITBOT_BITONIC_BUY_URL, "https://bitonic.nl/api/buy", "")
+	env.Optional(BITBOT_BITONIC_SELL_URL, "https://bitonic.nl/api/sell", "")
+	env.OptionalInt(BITBOT_POLL_INTERVAL_SEC, 30, "the bitonic poll interval (min= 10sec)")
+	env.OptionalBool(BITBOT_DATABASE_AUTO_MIGRATE, false, "set this variable to true if the database schema should be auto-migrated on startup")
+	env.OptionalBool(BITBOT_SLACK_API_DEBUG, false, "set this variable to true if the slack api library debug logging should be turned on")
+
+	env.MustParse()
+
 	// database schema check
 	connectionString := env.String(BITBOT_DATABASE_URL)
-	// strip out the password, if any...
-	cs, err := url.Parse(connectionString)
-	cs.User = url.User(cs.User.Username())
-	connstrNoPassword := cs.String()
+
 	m, err := migrations.New(connectionString)
 	if err != nil {
-		panicIf(errors.Wrapf(err, "error initializing database migrations with conn str %s", connstrNoPassword))
+		panicIf(errors.Wrapf(err, "error initializing database migrations"))
 	}
 
 	if err := m.Ping(); err != nil {
-		panicIf(errors.Wrapf(err, "error connecting to the database with conn str %s", connstrNoPassword))
+		panicIf(errors.Wrapf(err, "error connecting to the database "))
 	}
 
 	if env.Bool(BITBOT_DATABASE_AUTO_MIGRATE) {
@@ -105,7 +105,8 @@ func run() {
 	go rtm.ManageConnection()
 
 	// spawn bitonic price poller
-	go bitonic.PricePoller(bitonicApi, ds, 5*time.Second, shutdown)
+	pollInterval := time.Duration(env.Int(BITBOT_POLL_INTERVAL_SEC)) * time.Second
+	go bitonic.PricePoller(bitonicApi, ds, pollInterval, shutdown)
 
 	processSlackMessages(rtm, bitonicApi, ds)
 }

@@ -3,7 +3,6 @@ package migrations
 // generate the in-memory scripts filesystem
 //go:generate statik -f -src ./scripts
 
-
 import (
 	_ "github.com/resc/rescbits/bitbot/migrations/statik"
 	"github.com/resc/statik/fs"
@@ -74,7 +73,6 @@ func (mm Migrations) Swap(i, j int) {
 var _ sort.Interface = Migrations(nil)
 
 const (
-	queryCurrentDate           = "SELECT NOW() AS currentdate;"
 	queryMigrationsTableExists = "SELECT to_regclass('public.Migrations') IS NOT NULL;"
 	queryAllMigrations         = "SELECT Id, AppliedOn, Name FROM Migrations ORDER BY Id"
 	queryInsertMigration       = "INSERT INTO Migrations (Id, AppliedOn, Name) VALUES ($1, $2, $3)"
@@ -116,6 +114,7 @@ func (m migrations) Migrate() error {
 	if err != nil {
 		return errors.Wrap(err, "Could not fetch migration status")
 	}
+
 	for i := range mm {
 		if mm[i].IsApplied {
 			continue
@@ -129,10 +128,15 @@ func (m migrations) Migrate() error {
 		// run the migration in a inline func to ensure a rollback if the migration panics
 		err = func() (returnErr error) {
 			defer func() {
-				err, ok := recover().(error)
-				if ok && err != nil {
-					returnErr = err
+				err := recover()
+				if err != nil {
 					tx.Rollback()
+
+					if retErr, ok := err.(error); ok {
+						returnErr = retErr
+					} else {
+						returnErr = errors.New(fmt.Sprint(err))
+					}
 				}
 			}()
 
@@ -268,19 +272,23 @@ func (m *migrations) GetMigrationStatus() (Migrations, error) {
 				if mm[0].Id != 0 || mm[0].Name != "AddMigrationsTable" {
 					panic(errors.New(fmt.Sprintf("The first migration should be the migrations table migration")))
 				}
+
 				if _, err := db.Exec(mm[0].Script); err != nil {
 					return nil, errors.Wrap(err, "Error initializing migrations table")
-				} else {
-					db.Exec(queryInsertMigration, mm[0].Id, time.Now(), mm[0].Name)
+				}
+
+				_, err := db.Exec(queryInsertMigration, mm[0].Id, time.Now(), mm[0].Name)
+				if err != nil {
+					return nil, errors.Wrapf(err, "error creating migrations table")
 				}
 			}
 		}
 
 		rows, err := db.Query(queryAllMigrations)
-		defer rows.Close()
 		if err != nil {
 			return nil, errors.Wrap(err, "Error executing migration status query")
 		}
+		defer rows.Close()
 
 		current := &Migration{}
 		for rows.Next() {
@@ -292,6 +300,7 @@ func (m *migrations) GetMigrationStatus() (Migrations, error) {
 				mm[i].AppliedOn = current.AppliedOn
 			}
 		}
+
 		if err := rows.Err(); err != nil {
 			return nil, errors.Wrap(err, "Error loading migration status")
 		}
@@ -307,4 +316,3 @@ func (m *migrations) openDatabase() (*sql.DB, error) {
 func (m *Migration) Scan(rows *sql.Rows) error {
 	return rows.Scan(&m.Id, &m.AppliedOn, &m.Name)
 }
-
