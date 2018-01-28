@@ -60,6 +60,7 @@ func (b *Api) RequestPrice(request *PriceRequest) <-chan *PriceResponse {
 				}
 
 				response <- &PriceResponse{
+					Time:    time.Now(),
 					Request: *request,
 					Error:   errmsg,
 				}
@@ -93,11 +94,13 @@ func (b *Api) RequestPrice(request *PriceRequest) <-chan *PriceResponse {
 
 		if !priceData.Success || priceData.Error != "" {
 			response <- &PriceResponse{
+				Time:    time.Now(),
 				Request: *request,
 				Error:   fmt.Sprintf("Bitonic said: %s", priceData.Error),
 			}
 		} else {
 			response <- &PriceResponse{
+				Time:    time.Now(),
 				Request: *request,
 				Btc:     priceData.Btc,
 				Eur:     priceData.Eur,
