@@ -1,15 +1,15 @@
 package datastore
 
 import (
-	"os"
-	"github.com/pkg/errors"
-	"net/url"
-	"strings"
 	"database/sql"
-	"regexp"
 	"fmt"
+	"github.com/pkg/errors"
 	"github.com/resc/rescbits/bitbot/migrations"
 	"log"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
 )
 
 var (
@@ -34,11 +34,11 @@ func init() {
 			if db, err := sql.Open("postgres", connUrl.String()); err != nil {
 				panic(errors.Wrap(err, "could not open database connection for creating test database"))
 			} else {
-				if _, err := db.Exec(fmt.Sprintf("SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '%s'" , dbName)); err != nil {
+				if _, err := db.Exec(fmt.Sprintf("SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '%s'", dbName)); err != nil {
 					panic(errors.Wrapf(err, "could not drop connections to test database '%s'", dbName))
 				}
 
-				if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s",dbName)); err != nil {
+				if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
 					panic(errors.Wrapf(err, "could not drop existing test database '%s'", dbName))
 				}
 				if _, err := db.Exec(fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
@@ -55,7 +55,7 @@ func init() {
 					panic(errors.Wrapf(err, "error running test database migrations for db '%s'", dbName))
 				}
 
-				mm,err:=mr.GetMigrationStatus()
+				mm, err := mr.GetMigrationStatus()
 				if err != nil {
 					panic(errors.Wrapf(err, "error fetching test database migration status for db '%s'", dbName))
 				}
@@ -64,8 +64,8 @@ func init() {
 					log.Printf("\tid: %d, name: %40s, isApplied: %t", mm[i].Id, mm[i].Name, mm[i].IsApplied)
 				}
 
-				if len(mm)<5 {
-					panic(errors.Errorf( "Missing migrations for db '%s'", dbName))
+				if len(mm) < 5 {
+					panic(errors.Errorf("Missing migrations for db '%s'", dbName))
 
 				}
 			}

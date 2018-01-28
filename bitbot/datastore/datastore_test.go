@@ -1,8 +1,8 @@
 package datastore
 
 import (
-	"testing"
 	"github.com/pkg/errors"
+	"testing"
 	"time"
 )
 
@@ -47,7 +47,7 @@ func TestUow_SavePriceSamples(t *testing.T) {
 		samples[i] = PriceSample{
 			Price:     int64(i) * 1000,
 			Timestamp: now.Add(time.Duration(-i) * time.Second),
-			Type:      "B",
+			Type:      SampleTypeBuy,
 		}
 	}
 	maxTime := samples[0].Timestamp.Add(1 * time.Second)

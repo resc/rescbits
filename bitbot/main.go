@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/resc/slack"
 	"github.com/pkg/errors"
-	"github.com/resc/rescbits/bitbot/datastore"
-	"github.com/resc/rescbits/bitbot/migrations"
-	"github.com/resc/rescbits/bitbot/env"
 	"github.com/resc/rescbits/bitbot/bitonic"
+	"github.com/resc/rescbits/bitbot/datastore"
+	"github.com/resc/rescbits/bitbot/env"
+	"github.com/resc/rescbits/bitbot/migrations"
+	"github.com/resc/slack"
+	log "github.com/sirupsen/logrus"
+	"github.com/resc/rescbits/bitbot/bus"
 )
 
 // environment variables
@@ -104,61 +105,43 @@ func run() {
 	// spawn slack web socket message loop
 	go rtm.ManageConnection()
 
-	// spawn bitonic price poller
-	pollInterval := time.Duration(env.Int(BITBOT_POLL_INTERVAL_SEC)) * time.Second
-	go bitonic.PricePoller(bitonicApi, ds, pollInterval, shutdown)
-
-	processSlackMessages(rtm, bitonicApi, ds)
-}
-
-func processSlackMessages(rtm *slack.RTM, bitonicApi *bitonic.Api, ds datastore.DataStore) {
-	// bot initialization
 	bot, err := newBot(rtm, "", bitonicApi, ds)
 	panicIf(err)
-	// run slack bot message loop
-	for {
-		select {
-		case msg := <-rtm.IncomingEvents:
-			switch ev := msg.Data.(type) {
 
-			case *slack.HelloEvent:
-				log.Debug("Hello received")
-			case *slack.ConnectedEvent:
-				if bot, err = newBot(rtm, ev.Info.User.ID, bitonicApi, ds); err != nil {
-					log.Errorf("Error connecting bot: %s", err.Error())
+	// samples
+	samples := make(chan datastore.PriceSample)
+
+	// spawn bitonic price poller
+	pollInterval := time.Duration(env.Int(BITBOT_POLL_INTERVAL_SEC)) * time.Second
+	go bitonic.PricePoller(bitonicApi, ds, pollInterval, shutdown, samples)
+	RunNewPriceAlerter(updatedTriggers, samples, shutdown)
+	bot.Listen()
+
+	commands := bus.CreateTopic("commands")
+	priceSamples := bus.CreateTopic("priceSamples")
+	alerts := bus.CreateTopic("alerts")
+
+	go persistPriceSamples(priceSamples, ds)
+
+	triggerAlerts := priceSamples.Subscribe("triggerAlerts")
+
+}
+
+func persistPriceSamples(priceSamples bus.Topic, ds datastore.DataStore) {
+	subscription := priceSamples.Subscribe("persistPriceSamples")
+	for msg := range subscription.Messages() {
+		switch m := msg.(type) {
+		case datastore.PriceSample:
+			if ouw, err := ds.StartUow(); err != nil {
+				// TODO handle error
+			} else {
+				if err := ouw.SavePriceSamples(m); err != nil {
+					// TODO handle error
 				} else {
-					log.Debugf("Connected: bot id is %s", bot.ID)
+					if err := ouw.Commit(); err != nil {
+						// TODO handle error
+					}
 				}
-			case *slack.MessageEvent:
-				// only respond to messages sent to me by others on the same channel:
-				log.Debugf("Message received: %+v", ev)
-				if bot.isMessageForMe(ev) {
-					bot.HandleMessage(ev)
-				}
-			case *slack.ChannelJoinedEvent:
-				bot.sendMessagef(ev.Channel.ID, "Hi all, thanks for inviting me to #%s", ev.Channel.Name)
-			case *slack.PresenceChangeEvent:
-				log.Debugf("Presence changed to %s for user %s (type %s)", ev.Presence, ev.User, ev.Type)
-			case *slack.LatencyReport:
-				log.Debugf("Current latency: %+v\n", ev.Value)
-			case *slack.RTMError:
-				log.Errorf("Error: %+v\n", ev)
-			case *slack.ConnectionErrorEvent:
-				log.Errorf("Connection Error: %+v\n", ev)
-			case *slack.AckErrorEvent:
-				log.Errorf("Ack Error: %+v\n", ev)
-			case *slack.InvalidAuthEvent:
-				log.Errorf("Invalid credentials")
-			case *slack.ReconnectUrlEvent:
-				log.Debugf("Reconnect url %s: %+v", msg.Type, msg.Data)
-			case *slack.ConnectingEvent:
-				log.Infof("Connecting...  Attempt: %d, ConnectionCount: %d ", ev.Attempt, ev.ConnectionCount)
-			case *slack.DisconnectedEvent:
-				log.Infof("Disconnected: %+v", ev)
-			case *slack.UserChangeEvent:
-				log.Debugf("%s: %+v", msg.Type, msg.Data)
-			default:
-				log.Debugf("%s: %+v", msg.Type, msg.Data)
 			}
 		}
 	}

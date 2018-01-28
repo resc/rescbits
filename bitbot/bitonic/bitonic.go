@@ -1,25 +1,28 @@
 package bitonic
 
 import (
-	"time"
-	"net/http"
 	"encoding/json"
-	"io/ioutil"
-	"io"
 	"fmt"
-	"strings"
-	log "github.com/sirupsen/logrus"
 	"github.com/resc/rescbits/bitbot/datastore"
+	log "github.com/sirupsen/logrus"
+	"io"
+	"io/ioutil"
+	"net/http"
+	"strings"
+	"time"
 )
 
 const (
-	ActionBuy   = "buy"
-	ActionSell  = "sell"
-	CurrencyEur = "eur"
-	CurrencyBtc = "btc"
+	ActionBuy             = "buy"
+	ActionSell            = "sell"
+	CurrencyNone Currency = ""
+	CurrencyEur  Currency = "eur"
+	CurrencyBtc  Currency = "btc"
 )
 
 type (
+	Currency string
+
 	Api struct {
 		buyUrl  string
 		sellUrl string
@@ -27,7 +30,7 @@ type (
 
 	PriceRequest struct {
 		Action   string
-		Currency string
+		Currency Currency
 		Amount   float64
 	}
 
@@ -40,6 +43,44 @@ type (
 		Error   string
 	}
 )
+
+func (c Currency) Exp() int64 {
+	switch c {
+	case CurrencyEur:
+		return 1e5
+	case CurrencyBtc:
+		return 1e8
+	default:
+		return 1
+	}
+}
+
+func ParseCurrency(s string) Currency {
+	c := strings.ToLower(s)
+	switch c {
+	case "eur":
+		return CurrencyEur
+	case "btc":
+		return CurrencyBtc
+	default:
+		return CurrencyNone
+	}
+}
+
+func (c Currency) ExpFloat64() float64 {
+	switch c {
+	case CurrencyEur:
+		return 1e5
+	case CurrencyBtc:
+		return 1e8
+	default:
+		return 1
+	}
+}
+
+func (c Currency) String() string {
+	return string(c)
+}
 
 func New(buyUrl, sellUrl string) *Api {
 	return &Api{
@@ -111,7 +152,7 @@ func (b *Api) RequestPrice(request *PriceRequest) <-chan *PriceResponse {
 
 func (b *Api) buildRequestUrl(request *PriceRequest) (string, error) {
 	action := strings.ToLower(request.Action)
-	currency := strings.ToLower(request.Currency)
+	currency := request.Currency
 	url := ""
 
 	switch action {
@@ -136,7 +177,7 @@ func (b *Api) buildRequestUrl(request *PriceRequest) (string, error) {
 
 }
 
-func PricePoller(bitonicApi *Api, ds datastore.DataStore, pollInterval time.Duration, shutdown <-chan struct{}) {
+func PricePoller(bitonicApi *Api, ds datastore.DataStore, pollInterval time.Duration, shutdown <-chan struct{}, samples chan datastore.PriceSample) {
 	defer func() {
 
 		err := recover()
@@ -149,7 +190,7 @@ func PricePoller(bitonicApi *Api, ds datastore.DataStore, pollInterval time.Dura
 				return // quick exit on shutdown
 			case <-time.After(duration):
 				log.Infof("bitonicpPricePoller: resumed polling")
-				go PricePoller(bitonicApi, ds, pollInterval, shutdown)
+				go PricePoller(bitonicApi, ds, pollInterval, shutdown, samples)
 			}
 		}
 	}()
@@ -176,28 +217,32 @@ func PricePoller(bitonicApi *Api, ds datastore.DataStore, pollInterval time.Dura
 
 					buy := <-buyResponse
 					if buy.Error == "" {
-						err := uow.SavePriceSamples(datastore.PriceSample{
-							Type:      "B",
+						sample := datastore.PriceSample{
+							Type:      datastore.SampleTypeBuy,
 							Timestamp: buy.Time,
-							Price:     int64(buy.Price * 1e5),
-						})
+							Price:     int64(buy.Price * CurrencyEur.ExpFloat64()),
+						}
+						err := uow.SavePriceSamples(sample)
 						if err != nil {
 							log.Errorf("Error saving price sample", err)
 						}
+						samples <- sample
 					} else {
 						log.Errorf("Error fetching buy price: %s", buy.Error)
 					}
 
 					sell := <-sellResponse
 					if sell.Error == "" {
-						err := uow.SavePriceSamples(datastore.PriceSample{
-							Type:      "S",
+						sample := datastore.PriceSample{
+							Type:      datastore.SampleTypeSell,
 							Timestamp: sell.Time,
-							Price:     int64(sell.Price * 1e5),
-						})
+							Price:     int64(sell.Price * CurrencyEur.ExpFloat64()),
+						}
+						err := uow.SavePriceSamples(sample)
 						if err != nil {
 							log.Errorf("Error saving price sample", err)
 						}
+						samples <- sample
 					} else {
 						log.Errorf("Error fetching buy price: %s", sell.Error)
 					}

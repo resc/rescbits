@@ -1,8 +1,8 @@
 package env
 
 import (
-	"os"
 	"github.com/pkg/errors"
+	"os"
 )
 
 type stringVar struct {

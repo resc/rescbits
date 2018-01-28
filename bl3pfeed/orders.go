@@ -1,13 +1,13 @@
 package bl3pfeed
 
 import (
-	"net/http"
 	"github.com/gorilla/websocket"
+	"net/http"
 	"sync"
 
-	log "github.com/sirupsen/logrus"
-	"fmt"
 	"errors"
+	"fmt"
+	log "github.com/sirupsen/logrus"
 )
 
 type (

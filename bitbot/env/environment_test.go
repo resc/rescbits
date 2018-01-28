@@ -1,8 +1,8 @@
 package env
 
 import (
-	"testing"
 	"os"
+	"testing"
 )
 
 func TestKeyPattern(t *testing.T) {

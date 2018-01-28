@@ -1,13 +1,13 @@
 package bl3pfeed
 
 import (
-	"sync"
-	"github.com/gorilla/websocket"
-	log "github.com/sirupsen/logrus"
-	"strings"
-	"net/http"
 	"errors"
 	"fmt"
+	"github.com/gorilla/websocket"
+	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strings"
+	"sync"
 )
 
 type (
@@ -49,7 +49,7 @@ func NewTrades(baseUrl, version, market string, l TradesFeedListener) (*Trades, 
 		baseUrl:  strings.TrimSuffix(baseUrl, "/"),
 		version:  version,
 		market:   market,
-		channel: channel,
+		channel:  channel,
 		listener: l,
 		done:     make(chan struct{}),
 		log: log.WithFields(log.Fields{
@@ -59,10 +59,10 @@ func NewTrades(baseUrl, version, market string, l TradesFeedListener) (*Trades, 
 	}, nil
 }
 
-func (t *Trades) BaseUrl() string { return t.baseUrl; }
-func (t *Trades) Version() string { return t.version; }
-func (t *Trades) Market() string  { return t.market; }
-func (t *Trades) Channel() string { return t.channel; }
+func (t *Trades) BaseUrl() string { return t.baseUrl }
+func (t *Trades) Version() string { return t.version }
+func (t *Trades) Market() string  { return t.market }
+func (t *Trades) Channel() string { return t.channel }
 func (t *Trades) SetDebug(b bool) { t.debug = b }
 
 func (t *Trades) Open(h http.Header) error {
@@ -126,7 +126,7 @@ func (t *Trades) receive() {
 		case <-t.done:
 			return
 		default:
-			break;
+			break
 		}
 	}
 }

@@ -1,9 +1,9 @@
 package env
 
 import (
+	"github.com/pkg/errors"
 	"os"
 	"strconv"
-	"github.com/pkg/errors"
 )
 
 type intVar struct {

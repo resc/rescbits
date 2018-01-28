@@ -6,7 +6,7 @@ type variable struct {
 	isPresent   bool
 	description string
 	typ         string
-	raw string
+	raw         string
 }
 
 func (v *variable) Name() string {

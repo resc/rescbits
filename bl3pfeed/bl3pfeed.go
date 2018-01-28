@@ -21,15 +21,13 @@ type (
 		FeedClosed(channel string, err error)
 	}
 
-	TradesFeedListener interface{
+	TradesFeedListener interface {
 		FeedListener
 		OnTrade(t *Trade)
 	}
 
-	OrderBookFeedListener interface{
+	OrderBookFeedListener interface {
 		FeedListener
 		OnOrderBookChanged(o *OrderBook)
 	}
 )
-
-

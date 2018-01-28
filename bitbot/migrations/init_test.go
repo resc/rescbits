@@ -1,13 +1,13 @@
 package migrations
 
 import (
-	"os"
+	"database/sql"
+	"fmt"
 	"github.com/pkg/errors"
 	"net/url"
-	"strings"
-	"database/sql"
+	"os"
 	"regexp"
-	"fmt"
+	"strings"
 )
 
 var (

@@ -1,12 +1,12 @@
 package env
 
 import (
-	"regexp"
 	"github.com/pkg/errors"
-	"sync"
-	"sort"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"sync"
 )
 
 type (
@@ -27,8 +27,8 @@ var (
 	// KeyPattern contains the validation pattern for env keys.
 	// The default accepts variables like ALL_CAPS_WITH_UNDERSCORES.
 	// It can be changed, but you should do so before you register any variables
-	KeyPattern string         = "^[A-Z]+(_[A-Z]+)*$"
-	vars       map[string]Var = make(map[string]Var)
+	KeyPattern = "^[A-Z]+(_[A-Z]+)*$"
+	vars       = make(map[string]Var)
 	lock       sync.Mutex
 )
 
@@ -62,31 +62,31 @@ func GetVar(key string) (Var, bool) {
 func String(key string) string {
 	value := ""
 	Get(key, &value)
-	return value;
+	return value
 }
 
 func Bool(key string) bool {
 	value := false
 	Get(key, &value)
-	return value;
+	return value
 }
 
 func Int(key string) int {
 	value := 0
 	Get(key, &value)
-	return value;
+	return value
 }
 
 func Float(key string) float64 {
 	value := 0.0
 	Get(key, &value)
-	return value;
+	return value
 }
 
 func File(key string) *os.File {
 	value := ""
 	Get(key, &value)
-	file, err := os.Open(value);
+	file, err := os.Open(value)
 	if err != nil {
 		panic(errors.Wrapf(err, "Error opening file '%s' set with environment var %s", value, key))
 	}
@@ -99,7 +99,7 @@ func Get(key string, pointer interface{}) {
 	defer lock.Unlock()
 
 	v, ok := vars[key]
-	if ! ok {
+	if !ok {
 		panic(errors.Errorf("environment variable %s not registered", v.Name()))
 	}
 

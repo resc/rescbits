@@ -4,19 +4,19 @@ package migrations
 //go:generate statik -f -src ./scripts
 
 import (
+	"github.com/pkg/errors"
 	_ "github.com/resc/rescbits/bitbot/migrations/statik"
 	"github.com/resc/statik/fs"
-	"github.com/pkg/errors"
 
 	"database/sql"
 	_ "github.com/lib/pq"
 
-	"time"
-	"regexp"
-	"strconv"
-	"io/ioutil"
-	"sort"
 	"fmt"
+	"io/ioutil"
+	"regexp"
+	"sort"
+	"strconv"
+	"time"
 )
 
 type (
@@ -178,10 +178,10 @@ func (m *migrations) Ping() error {
 }
 
 var (
-	migrationPattern *regexp.Regexp = regexp.MustCompile(`^.*/(?P<type>[A-Z])(?P<id>\d+)_(?P<name>.*)\.[sS][qQ][lL]$`)
+	migrationPattern = regexp.MustCompile(`^.*/(?P<type>[A-Z])(?P<id>\d+)_(?P<name>.*)\.[sS][qQ][lL]$`)
 )
 
-func parseScriptName(input string) (map[string]string) {
+func parseScriptName(input string) map[string]string {
 	match := migrationPattern.FindStringSubmatch(input)
 	subMatches := make(map[string]string)
 	if len(match) == 0 {

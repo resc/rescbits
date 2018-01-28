@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"github.com/resc/rescbits/bl3pfeed"
 	log "github.com/sirupsen/logrus"
 	"os"
-	"bufio"
-	"fmt"
 	"time"
 )
 
